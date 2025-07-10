@@ -1,6 +1,10 @@
 # MiniDB - Complete RDBMS with Transaction Logging and Crash Recovery
 
-MiniDB is a fully-featured relational database management system (RDBMS) implemented in C, designed for educational purposes and as a foundation for understanding database internals. It provides complete ACID transaction support with Write-Ahead Logging (WAL) and crash recovery capabilities.
+MiniDB is a fully-featured relational database management system (RDBMS) implemented in C, designed for educational purposes and as a foundation for understanding database internals. It provides complete ACID transaction support with Write-Ahead Logging (WAL) and crash recovery capabilities. 
+
+Having said that, it is not production ready and should be seen as experimental and not fully functional. The code is still unstable and has issues. Its is not thoroughly tested on all aspects. It has minimalist approach of RDBMS server and doesn't claim to be scalable.
+
+Following is just the list of features which are attempted. There are many more missing in it's current state. 
 
 ## Features
 
