@@ -1,0 +1,281 @@
+#!/bin/bash
+
+# MiniDB Configuration Script
+# Checks for required dependencies and system compatibility
+
+set -e
+
+echo "MiniDB Configuration Check"
+echo "=========================="
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+ERRORS=0
+WARNINGS=0
+
+# Function to check command availability
+check_command() {
+    local cmd=$1
+    local desc=$2
+    local required=${3:-true}
+    
+    if command -v "$cmd" >/dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} $desc: $(command -v $cmd)"
+        if [ "$cmd" = "gcc" ]; then
+            echo "  Version: $(gcc --version | head -n1)"
+        fi
+    else
+        if [ "$required" = "true" ]; then
+            echo -e "${RED}✗${NC} $desc: NOT FOUND (REQUIRED)"
+            ERRORS=$((ERRORS + 1))
+        else
+            echo -e "${YELLOW}!${NC} $desc: NOT FOUND (OPTIONAL)"
+            WARNINGS=$((WARNINGS + 1))
+        fi
+    fi
+}
+
+# Function to check header availability
+check_header() {
+    local header=$1
+    local desc=$2
+    
+    if echo "#include <$header>" | gcc -E - >/dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} $desc header: $header"
+    else
+        echo -e "${RED}✗${NC} $desc header: $header (MISSING)"
+        ERRORS=$((ERRORS + 1))
+    fi
+}
+
+# Function to check library availability
+check_library() {
+    local lib=$1
+    local desc=$2
+    
+    if gcc -l$lib -x c /dev/null -o /dev/null >/dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} $desc library: lib$lib"
+    else
+        echo -e "${RED}✗${NC} $desc library: lib$lib (MISSING)"
+        ERRORS=$((ERRORS + 1))
+    fi
+}
+
+echo
+echo "System Information:"
+echo "OS: $(uname -s)"
+echo "Architecture: $(uname -m)"
+echo "Kernel: $(uname -r)"
+echo
+
+echo "Checking Required Dependencies:"
+echo "------------------------------"
+
+# Check essential build tools
+check_command "gcc" "GCC Compiler"
+check_command "make" "Make Build System"
+
+# Check optional tools
+check_command "flex" "Flex Lexer" false
+check_command "bison" "Bison Parser" false
+
+echo
+echo "Checking System Headers:"
+echo "-----------------------"
+
+# Check required headers
+check_header "stdio.h" "Standard I/O"
+check_header "stdlib.h" "Standard Library"
+check_header "string.h" "String Functions"
+check_header "unistd.h" "POSIX Standard"
+check_header "pthread.h" "POSIX Threads"
+check_header "sys/socket.h" "Socket API"
+check_header "netinet/in.h" "Internet Protocol"
+check_header "fcntl.h" "File Control"
+
+# macOS specific headers
+if [ "$(uname -s)" = "Darwin" ]; then
+    check_header "sys/stat.h" "File Status (macOS)"
+fi
+
+echo
+echo "Checking Libraries:"
+echo "------------------"
+
+# Check pthread library (skip for macOS as it's built-in)
+if [ "$(uname -s)" != "Darwin" ]; then
+    check_library "pthread" "POSIX Threads"
+else
+    echo -e "${GREEN}✓${NC} POSIX Threads library: built-in (macOS)"
+fi
+
+echo
+echo "Checking Compiler Features:"
+echo "--------------------------"
+
+# Check C99 support (macOS uses clang, not gcc)
+if [ "$(uname -s)" = "Darwin" ]; then
+    if clang -std=c99 -x c /dev/null -o /dev/null >/dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} C99 Standard Support (clang)"
+    else
+        echo -e "${RED}✗${NC} C99 Standard Support (REQUIRED)"
+        ERRORS=$((ERRORS + 1))
+    fi
+else
+    if gcc -std=c99 -x c /dev/null -o /dev/null >/dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} C99 Standard Support"
+    else
+        echo -e "${RED}✗${NC} C99 Standard Support (REQUIRED)"
+        ERRORS=$((ERRORS + 1))
+    fi
+fi
+
+# Check threading support
+if [ "$(uname -s)" = "Darwin" ]; then
+    if clang -pthread -x c /dev/null -o /dev/null >/dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} Threading Support (-pthread)"
+    else
+        echo -e "${RED}✗${NC} Threading Support (-pthread) (REQUIRED)"
+        ERRORS=$((ERRORS + 1))
+    fi
+else
+    if gcc -pthread -x c /dev/null -o /dev/null >/dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} Threading Support (-pthread)"
+    else
+        echo -e "${RED}✗${NC} Threading Support (-pthread) (REQUIRED)"
+        ERRORS=$((ERRORS + 1))
+    fi
+fi
+
+# Platform-specific checks
+if [ "$(uname -s)" = "Darwin" ]; then
+    echo
+    echo "macOS Specific Checks:"
+    echo "---------------------"
+    
+    # Check Xcode Command Line Tools
+    if xcode-select -p >/dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} Xcode Command Line Tools: $(xcode-select -p)"
+    else
+        echo -e "${RED}✗${NC} Xcode Command Line Tools (REQUIRED for macOS)"
+        echo "  Install with: xcode-select --install"
+        ERRORS=$((ERRORS + 1))
+    fi
+    
+    # Check architecture support
+    if [ "$(uname -m)" = "arm64" ]; then
+        if clang -arch arm64 -x c /dev/null -o /dev/null >/dev/null 2>&1; then
+            echo -e "${GREEN}✓${NC} ARM64 Architecture Support"
+        else
+            echo -e "${RED}✗${NC} ARM64 Architecture Support"
+            ERRORS=$((ERRORS + 1))
+        fi
+    fi
+fi
+
+echo
+echo "Build Environment Test:"
+echo "----------------------"
+
+# Test basic compilation
+cat > /tmp/minidb_test.c << 'EOF'
+#include <stdio.h>
+#include <pthread.h>
+#include <sys/socket.h>
+
+void* test_thread(void* arg) {
+    return NULL;
+}
+
+int main() {
+    pthread_t thread;
+    pthread_create(&thread, NULL, test_thread, NULL);
+    pthread_join(thread, NULL);
+    printf("Build test successful\n");
+    return 0;
+}
+EOF
+
+# Use appropriate compiler for platform
+if [ "$(uname -s)" = "Darwin" ]; then
+    COMPILER="clang"
+else
+    COMPILER="gcc"
+fi
+
+if $COMPILER -std=c99 -pthread -o /tmp/minidb_test /tmp/minidb_test.c >/dev/null 2>&1; then
+    if /tmp/minidb_test >/dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} Basic build and execution test passed"
+    else
+        echo -e "${RED}✗${NC} Basic execution test failed"
+        ERRORS=$((ERRORS + 1))
+    fi
+else
+    echo -e "${RED}✗${NC} Basic compilation test failed"
+    ERRORS=$((ERRORS + 1))
+fi
+
+# Cleanup
+rm -f /tmp/minidb_test.c /tmp/minidb_test
+
+echo
+echo "Configuration Summary:"
+echo "====================="
+
+if [ $ERRORS -eq 0 ]; then
+    echo -e "${GREEN}✓ All required dependencies are satisfied${NC}"
+    if [ $WARNINGS -gt 0 ]; then
+        echo -e "${YELLOW}! $WARNINGS optional dependencies missing${NC}"
+        echo "  Optional tools provide enhanced functionality but are not required for basic operation"
+    fi
+    echo
+    echo "You can now build MiniDB:"
+    echo "  make all          # Build server and client"
+    echo "  make test         # Run test suite"
+    echo "  make platformtest # Test platform compatibility"
+    
+    # Create config status file
+    cat > config.status << EOF
+# MiniDB Configuration Status
+# Generated by configure script on $(date)
+PLATFORM=$(uname -s)
+ARCHITECTURE=$(uname -m)
+GCC_VERSION=$(gcc --version | head -n1)
+CONFIGURED=yes
+EOF
+    echo
+    echo "Configuration saved to config.status"
+    exit 0
+else
+    echo -e "${RED}✗ $ERRORS required dependencies are missing${NC}"
+    if [ $WARNINGS -gt 0 ]; then
+        echo -e "${YELLOW}! $WARNINGS optional dependencies missing${NC}"
+    fi
+    echo
+    echo "Please install missing dependencies before building MiniDB"
+    
+    # Platform-specific installation hints
+    if [ "$(uname -s)" = "Darwin" ]; then
+        echo
+        echo "macOS Installation Commands:"
+        echo "  xcode-select --install    # Install Xcode Command Line Tools"
+        echo "  brew install gcc make     # Install via Homebrew (if needed)"
+    elif [ "$(uname -s)" = "Linux" ]; then
+        echo
+        echo "Linux Installation Commands:"
+        if command -v apt-get >/dev/null 2>&1; then
+            echo "  sudo apt-get update"
+            echo "  sudo apt-get install build-essential"
+        elif command -v yum >/dev/null 2>&1; then
+            echo "  sudo yum groupinstall 'Development Tools'"
+        elif command -v dnf >/dev/null 2>&1; then
+            echo "  sudo dnf groupinstall 'Development Tools'"
+        fi
+    fi
+    
+    exit 1
+fi
