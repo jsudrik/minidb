@@ -4,6 +4,44 @@
 #include <unistd.h>
 #include "../../common/wal_types.h"
 
+/**
+ * MiniDB Recovery Manager
+ * ======================
+ * 
+ * CRASH RECOVERY ALGORITHM (ARIES-based):
+ * The recovery process ensures database consistency after system failures
+ * using Write-Ahead Logging (WAL) and a three-phase recovery protocol.
+ * 
+ * RECOVERY PHASES:
+ * 1. ANALYSIS: Scan WAL to identify committed/uncommitted transactions
+ * 2. REDO: Replay all operations to restore database to crash state
+ * 3. UNDO: Rollback all uncommitted transactions
+ * 
+ * WAL PROTOCOL:
+ * - All changes written to WAL before data pages (Write-Ahead)
+ * - WAL records contain before/after images for undo/redo
+ * - LSN (Log Sequence Number) provides total ordering
+ * - Force WAL to disk before commit (durability)
+ * 
+ * REDO LOGIC:
+ * - Replay all operations from WAL in forward order
+ * - Idempotent: Safe to replay multiple times
+ * - Restores database to state at time of crash
+ * - Includes both committed and uncommitted changes
+ * 
+ * UNDO LOGIC:
+ * - Rollback uncommitted transactions in reverse order
+ * - Uses before-images to restore original values
+ * - Ensures atomicity: all-or-nothing transaction semantics
+ * - Writes compensation log records (CLRs) for crash during recovery
+ * 
+ * CHECKPOINTING:
+ * - Periodic snapshots to limit recovery time
+ * - Forces dirty pages to disk
+ * - Records active transactions at checkpoint time
+ * - Enables recovery to start from checkpoint, not beginning
+ */
+
 // Include diagnostics
 extern void dump_page_contents(int page_id, const char* label);
 extern void dump_wal_record(WALRecord* record, const char* label);

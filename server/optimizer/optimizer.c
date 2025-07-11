@@ -5,6 +5,34 @@
 #include <limits.h>
 #include "../../common/types.h"
 
+/**
+ * MiniDB Query Optimizer
+ * ======================
+ * 
+ * OVERVIEW:
+ * The query optimizer analyzes SQL queries and selects the most efficient
+ * execution plan. It makes cost-based decisions about data access methods.
+ * 
+ * OPTIMIZATION STRATEGY:
+ * 1. Analyze query structure (SELECT, WHERE, JOIN clauses)
+ * 2. Identify available indexes on referenced columns
+ * 3. Estimate costs for different access methods:
+ *    - Table scan: O(n) - reads all pages sequentially
+ *    - Index scan: O(log n + k) - B-tree traversal + result fetch
+ *    - Hash lookup: O(1 + k) - direct access for equality
+ * 4. Select plan with lowest estimated cost
+ * 
+ * DECISION LOGIC:
+ * - Hash index: Best for equality predicates (WHERE col = value)
+ * - B-Tree index: Best for range queries (WHERE col > value)
+ * - Table scan: Fallback when no suitable index exists
+ * 
+ * COST MODEL:
+ * - Page I/O is the primary cost factor
+ * - CPU costs are secondary (sorting, comparisons)
+ * - Selectivity estimates affect result size predictions
+ */
+
 typedef struct {
     enum { OP_SCAN, OP_INDEX_SCAN, OP_SELECT, OP_PROJECT, OP_JOIN } type;
     char table_name[MAX_NAME_LEN];
@@ -18,24 +46,49 @@ typedef struct {
 
 extern Table* find_table_by_name(const char* name);
 
+/**
+ * Estimate table size for cost calculations
+ * 
+ * LOGIC:
+ * - System tables (ID <= 4): Small, ~10 rows
+ * - User tables: Assume ~1000 rows (would use statistics in production)
+ * 
+ * FUTURE: Replace with actual table statistics from catalog
+ */
 int estimate_table_size(const char* table_name) {
     Table* table = find_table_by_name(table_name);
     if (!table) return 0;
     
     if (table->table_id <= 4) {
-        return 10; // System tables
+        return 10; // System tables are small
     }
-    return 1000; // User tables
+    return 1000; // Default estimate for user tables
 }
 
+/**
+ * Estimate cost of sequential table scan
+ * 
+ * COST MODEL:
+ * - Assumes ~50 rows per page (4KB pages)
+ * - Must read all pages containing data
+ * - Linear cost: O(n) where n = table size
+ */
 int estimate_scan_cost(const char* table_name) {
     int table_size = estimate_table_size(table_name);
     return (table_size / 50) + 1; // Pages to read
 }
 
+/**
+ * Estimate cost of index scan
+ * 
+ * COST MODEL:
+ * - B-Tree: log(n) for traversal + result pages
+ * - Hash: O(1) for equality lookups
+ * - Much more efficient than table scan for selective queries
+ */
 int estimate_index_scan_cost(const char* table_name) {
     int table_size = estimate_table_size(table_name);
-    return (table_size / 1000) + 1; // Much faster
+    return (table_size / 1000) + 1; // Logarithmic access cost
 }
 
 QueryPlan* optimize_select_query(const char* table_name, 

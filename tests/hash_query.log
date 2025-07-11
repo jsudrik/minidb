@@ -1,9 +1,0 @@
-MiniDB Client - Connecting to 127.0.0.1:7000...
-Connected successfully!
-
-Connected to MiniDB Server (Read Committed Isolation)
-Connected to MiniDB Server
-Type 'help' for commands, 'quit' to exit
-
-minidb[1]> Server disconnected
-Connection closed. Goodbye!

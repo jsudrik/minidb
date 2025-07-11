@@ -10,6 +10,53 @@
 #include <signal.h>
 #include "../../common/types.h"
 
+/**
+ * MiniDB Network Layer
+ * ===================
+ * 
+ * PROTOCOL DESIGN:
+ * - Simple text-based protocol over TCP
+ * - Client sends SQL queries as plain text
+ * - Server responds with formatted result sets
+ * - Connection-oriented: one connection per client session
+ * 
+ * COMMUNICATION FLOW:
+ * 1. Client connects to server on specified port
+ * 2. Server sends welcome message
+ * 3. Client sends SQL queries (terminated by newline)
+ * 4. Server processes query and sends formatted results
+ * 5. Connection remains open for multiple queries
+ * 6. Client sends 'quit' or closes connection to disconnect
+ * 
+ * CONCURRENCY MODELS:
+ * 
+ * 1. Multi-Process Mode (Default):
+ *    - Fork separate process for each client connection
+ *    - Shared memory for server state coordination
+ *    - Process isolation prevents client crashes from affecting server
+ *    - Higher memory usage but better fault isolation
+ *    - Each client gets dedicated process and transaction context
+ * 
+ * 2. Multi-Threaded Mode (Optional):
+ *    - Create separate thread for each client connection
+ *    - Shared memory space between all client threads
+ *    - Lower memory usage, faster context switching
+ *    - Requires careful synchronization for thread safety
+ *    - Each client gets dedicated thread and transaction context
+ * 
+ * ERROR HANDLING:
+ * - Network errors: Connection drops, client disconnects
+ * - Query errors: Syntax errors, constraint violations
+ * - Server errors: Resource exhaustion, internal failures
+ * 
+ * ASSUMPTIONS:
+ * - Clients are trusted (no authentication implemented)
+ * - Queries fit in single network packet (< 2KB)
+ * - Results fit in memory (< 8KB response buffer)
+ * - TCP provides reliable, ordered delivery
+ * - No encryption (plaintext communication)
+ */
+
 extern int process_query(const char* query, QueryResult* result, uint32_t txn_id);
 extern uint32_t begin_transaction(IsolationLevel isolation);
 extern int commit_transaction(uint32_t txn_id);
@@ -28,7 +75,11 @@ typedef struct {
 } SharedServerState;
 
 static SharedServerState* shared_state = NULL;
-static int use_multiprocess = 1; // Toggle between multiprocess and threading (disabled for now)
+#ifdef MULTITHREADED
+static int use_multiprocess = 0; // Multi-threaded mode
+#else
+static int use_multiprocess = 1; // Multi-process mode (default)
+#endif
 
 void format_value(Value* value, DataType type, char* buffer, int buffer_size) {
     switch (type) {
@@ -281,6 +332,9 @@ int start_server(int port) {
         return -1;
     }
     
+    printf("MiniDB Server starting in %s mode\n", 
+           use_multiprocess ? "multi-process" : "multi-threaded");
+    
     // Setup signal handlers
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
@@ -312,7 +366,8 @@ int start_server(int port) {
         return -1;
     }
     
-    printf("MiniDB Server listening on port %d (multiprocess mode)\n", port);
+    printf("MiniDB Server listening on port %d (%s mode)\n", port,
+           use_multiprocess ? "multi-process" : "multi-threaded");
     fflush(stdout);
     
     while (1) {
@@ -396,46 +451,46 @@ int start_server(int port) {
                 }
             }
         } else {
-            // Handle client directly (fallback mode)
-            printf("Handling client directly (no threading)\n");
+            // Multi-threaded mode
+            printf("Creating thread for client fd: %d\n", session->client_fd);
             fflush(stdout);
-            handle_client((void*)session);
+            
+            pthread_t thread;
+            pthread_attr_t attr;
+            pthread_attr_init(&attr);
+            pthread_attr_setstacksize(&attr, 1024 * 1024); // 1MB stack
+            
+            int thread_result = pthread_create(&thread, &attr, handle_client, (void *)session);
+            pthread_attr_destroy(&attr);
+            
+            if (thread_result != 0) {
+                printf("Thread creation failed with error: %d\n", thread_result);
+                perror("pthread_create failed");
+                close(session->client_fd);
+                free(session);
+                if (shared_state) {
+                    pthread_mutex_lock(&shared_state->mutex);
+                    shared_state->active_connections--;
+                    pthread_mutex_unlock(&shared_state->mutex);
+                }
+                continue;
+            }
+            
+            printf("Thread created successfully, detaching...\n");
+            int detach_result = pthread_detach(thread);
+            if (detach_result != 0) {
+                printf("Thread detach failed with error: %d\n", detach_result);
+            } else {
+                printf("Thread detached successfully\n");
+            }
         }
-        
-        /*
-        pthread_t thread;
-        printf("Attempting to create thread for client fd: %d\n", session->client_fd);
-        
-        // Create thread attributes for ARM64 compatibility
-        pthread_attr_t attr;
-        pthread_attr_init(&attr);
-        pthread_attr_setstacksize(&attr, 1024 * 1024); // 1MB stack
-        
-        int thread_result = pthread_create(&thread, &attr, handle_client, (void *)session);
-        pthread_attr_destroy(&attr);
-        if (thread_result != 0) {
-            printf("Thread creation failed with error: %d\n", thread_result);
-            perror("pthread_create failed");
-            close(session->client_fd);
-            free(session);
-            continue;
-        }
-        
-        printf("Thread created successfully, detaching...\n");
-        int detach_result = pthread_detach(thread);
-        if (detach_result != 0) {
-            printf("Thread detach failed with error: %d\n", detach_result);
-        } else {
-            printf("Thread detached successfully\n");
-        }
-        */
     }
     
     // Wait for all child processes
     while (wait(NULL) > 0);
     
-    // Cleanup shared memory
-    if (shared_state) {
+    // Cleanup shared memory (only in multi-process mode)
+    if (use_multiprocess && shared_state) {
         pthread_mutex_destroy(&shared_state->mutex);
         munmap(shared_state, sizeof(SharedServerState));
     }

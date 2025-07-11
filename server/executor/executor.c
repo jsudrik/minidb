@@ -4,6 +4,45 @@
 #include <strings.h>
 #include "../../common/types.h"
 
+/**
+ * MiniDB Query Executor
+ * ====================
+ * 
+ * OVERVIEW:
+ * The query executor implements the physical operations for data access
+ * and manipulation. It receives optimized query plans and executes them
+ * using the most appropriate scan methods.
+ * 
+ * SCAN TYPES:
+ * 1. Sequential Scan (Table Scan):
+ *    - Reads all pages of a table sequentially
+ *    - Applies WHERE filters during scan
+ *    - Used when no suitable index exists
+ *    - Cost: O(n) where n = number of pages
+ * 
+ * 2. Index Scan:
+ *    - Uses B-Tree or Hash index for efficient access
+ *    - B-Tree: Supports range queries, sorted results
+ *    - Hash: Supports equality queries, fastest for exact matches
+ *    - Cost: O(log n + k) where k = result size
+ * 
+ * 3. Index-Only Scan (Future):
+ *    - Returns data directly from index without table access
+ *    - Requires covering indexes
+ * 
+ * EXECUTION PIPELINE:
+ * 1. Receive query plan from optimizer
+ * 2. Initialize appropriate scan operator
+ * 3. Apply WHERE clause filters
+ * 4. Project requested columns
+ * 5. Format results for client
+ * 
+ * TRANSACTION INTEGRATION:
+ * - All operations respect transaction isolation levels
+ * - Acquires appropriate locks (shared for reads, exclusive for writes)
+ * - Participates in two-phase commit protocol
+ */
+
 extern int create_table_storage(const char* table_name, Column* columns, int column_count, uint32_t txn_id);
 extern int drop_table_storage(const char* table_name, uint32_t txn_id);
 extern int insert_record(const char* table_name, Value* values, int value_count, uint32_t txn_id);
@@ -167,6 +206,27 @@ int execute_delete(const char* table_name, const char* where_clause, uint32_t tx
     return ret >= 0 ? 0 : -1;
 }
 
+/**
+ * Execute SELECT query with WHERE clause
+ * 
+ * EXECUTION STRATEGY:
+ * 1. Determine optimal scan method (index vs table scan)
+ * 2. Acquire shared locks for read consistency
+ * 3. Perform scan with predicate pushdown
+ * 4. Apply WHERE clause filtering
+ * 5. Project requested columns
+ * 6. Return formatted results
+ * 
+ * SCAN SELECTION:
+ * - Check for indexes on WHERE column
+ * - Use index scan if available and selective
+ * - Fall back to table scan with filter
+ * 
+ * FILTERING:
+ * - Applies WHERE predicates as early as possible
+ * - Reduces I/O by filtering at storage layer
+ * - Supports equality and range predicates
+ */
 int execute_select_with_where(const char* table_name, const char* where_column, const char* where_value, uint32_t txn_id, QueryResult* result) {
     Table* table = find_table_by_name(table_name);
     if (!table) {
