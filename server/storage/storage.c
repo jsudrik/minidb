@@ -58,12 +58,20 @@ typedef struct {
 int write_system_table_record(int table_id, const void* record, int record_size) {
     static int sys_page_ids[5] = {1, 2, 3, 4, 5};
     
+    printf("METADATA: Writing system table record to page %d, size %d\n", sys_page_ids[table_id], record_size);
+    
     Page* page = get_page(sys_page_ids[table_id], 1); // System transaction
-    if (!page) return -1;
+    if (!page) {
+        printf("METADATA: Failed to get page %d\n", sys_page_ids[table_id]);
+        return -1;
+    }
     
     DataPage* data_page = (DataPage*)page->data;
     
+    printf("METADATA: Page %d current record_count: %d\n", sys_page_ids[table_id], data_page->record_count);
+    
     if (data_page->record_count * record_size >= sizeof(data_page->records)) {
+        printf("METADATA: Page %d full, cannot add record\n", sys_page_ids[table_id]);
         unpin_page(page);
         return -1;
     }
@@ -72,7 +80,15 @@ int write_system_table_record(int table_id, const void* record, int record_size)
            record, record_size);
     data_page->record_count++;
     
+    printf("METADATA: Added record to page %d, new count: %d\n", sys_page_ids[table_id], data_page->record_count);
+    
     mark_dirty(page);
+    
+    // Force flush system catalog to disk for persistence
+    extern void flush_all_pages();
+    flush_all_pages();
+    printf("METADATA: Flushed all pages to disk\n");
+    
     unpin_page(page);
     return 0;
 }
@@ -197,25 +213,55 @@ int insert_record(const char* table_name, Value* values, int value_count, uint32
     Table* table = find_table_by_name(table_name);
     if (!table) return -1;
     
-    int data_page_id = table->table_id;
-    Page* page = get_page(data_page_id, txn_id);
+    int current_page_id = table->table_id;
+    Page* page = get_page(current_page_id, txn_id);
     if (!page) return -1;
     
     DataPage* data_page = (DataPage*)page->data;
     int record_size = calculate_record_size(table->columns, table->column_count);
     
-    if ((data_page->record_count + 1) * record_size >= sizeof(data_page->records)) {
-        unpin_page(page);
-        return -1;
+    // Find page with space
+    while ((data_page->record_count + 1) * record_size >= sizeof(data_page->records)) {
+        if (data_page->next_page == -1) {
+            // Need new page
+            int new_page_id = allocate_page();
+            if (new_page_id < 0) {
+                unpin_page(page);
+                return -1;
+            }
+            
+            data_page->next_page = new_page_id;
+            mark_dirty(page);
+            unpin_page(page);
+            
+            current_page_id = new_page_id;
+            page = get_page(current_page_id, txn_id);
+            if (!page) return -1;
+            
+            data_page = (DataPage*)page->data;
+            data_page->record_count = 0;
+            data_page->next_page = -1;
+            data_page->deleted_count = 0;
+            
+            printf("INSERT: Allocated new page %d\n", new_page_id);
+            break;
+        } else {
+            // Move to next page
+            unpin_page(page);
+            current_page_id = data_page->next_page;
+            page = get_page(current_page_id, txn_id);
+            if (!page) return -1;
+            data_page = (DataPage*)page->data;
+        }
     }
     
     char record_buffer[512];
     serialize_record(table->columns, table->column_count, values, record_buffer);
     
-    // Enable WAL logging for data persistence
+    // WAL log to correct current page
     extern uint64_t wal_log_insert(uint32_t txn_id, int page_id, const char* record, int record_size);
     if (record_size > 0 && record_size < 512) {
-        wal_log_insert(txn_id, data_page_id, record_buffer, record_size);
+        wal_log_insert(txn_id, current_page_id, record_buffer, record_size);
     }
     
     memcpy(data_page->records + (data_page->record_count * record_size), 
@@ -270,11 +316,11 @@ int update_record(const char* table_name, const char* column, Value* value, cons
             record_values[col_idx] = *value;
             serialize_record(table->columns, table->column_count, record_values, record_ptr);
             
-            // Skip WAL logging for debugging
-            // extern uint64_t wal_log_update(uint32_t txn_id, int page_id, const char* before, const char* after, int record_size);
-            // if (record_size > 0 && record_size < 512) {
-            //     wal_log_update(txn_id, data_page_id, before_image, record_ptr, record_size);
-            // }
+            // Enable WAL logging for UPDATE operations
+            extern uint64_t wal_log_update(uint32_t txn_id, int page_id, const char* before, const char* after, int record_size);
+            if (record_size > 0 && record_size < 512) {
+                wal_log_update(txn_id, data_page_id, before_image, record_ptr, record_size);
+            }
             
             updated_count++;
         }
@@ -308,11 +354,11 @@ int delete_record(const char* table_name, const char* where_clause, uint32_t txn
             char before_image[512];
             memcpy(before_image, record_ptr, record_size);
             
-            // Skip WAL logging for debugging
-            // extern uint64_t wal_log_delete(uint32_t txn_id, int page_id, const char* record, int record_size);
-            // if (record_size > 0 && record_size < 512) {
-            //     wal_log_delete(txn_id, data_page_id, before_image, record_size);
-            // }
+            // Enable WAL logging for DELETE operations
+            extern uint64_t wal_log_delete(uint32_t txn_id, int page_id, const char* record, int record_size);
+            if (record_size > 0 && record_size < 512) {
+                wal_log_delete(txn_id, data_page_id, before_image, record_size);
+            }
             
             record_ptr[0] = 1; // Mark as deleted
             deleted_count++;
@@ -333,12 +379,6 @@ int scan_table(const char* table_name, QueryResult* result, uint32_t txn_id) {
     Table* table = find_table_by_name(table_name);
     if (!table) return -1;
     
-    int data_page_id = table->table_id;
-    Page* page = get_page(data_page_id, txn_id);
-    if (!page) return -1;
-    
-    DataPage* data_page = (DataPage*)page->data;
-    
     result->column_count = table->column_count;
     for (int i = 0; i < table->column_count; i++) {
         result->columns[i] = table->columns[i];
@@ -346,29 +386,44 @@ int scan_table(const char* table_name, QueryResult* result, uint32_t txn_id) {
     
     int record_size = calculate_record_size(table->columns, table->column_count);
     
-    // Fix for recovery: use actual WAL record size if available
+    // Fix for recovery: always use WAL record size if available
     extern int g_recovery_record_size;
-    if (record_size < 15 && data_page->record_count > 0 && g_recovery_record_size > 0) {
+    if (g_recovery_record_size > 0) {
         record_size = g_recovery_record_size;
-        printf("SELECT: Using recovery record_size=%d\n", record_size);
+        printf("SELECT: Using recovery record_size=%d (calculated=%d)\n", record_size, calculate_record_size(table->columns, table->column_count));
     }
     
     int result_row = 0;
+    int current_page_id = table->table_id;
+    int page_count = 0;
     
-    for (int row = 0; row < data_page->record_count && result_row < MAX_RESULT_ROWS; row++) {
-        const char* record_ptr = data_page->records + (row * record_size);
-        bool deleted;
+    // Scan all pages in the chain
+    while (current_page_id != -1 && result_row < MAX_RESULT_ROWS) {
+        Page* page = get_page(current_page_id, txn_id);
+        if (!page) break;
         
-        deserialize_record(table->columns, table->column_count, record_ptr, result->data[result_row], &deleted);
+        DataPage* data_page = (DataPage*)page->data;
+        page_count++;
         
-        if (!deleted) {
-            result_row++;
+        printf("SCAN: Page %d has %d records\n", current_page_id, data_page->record_count);
+        
+        for (int row = 0; row < data_page->record_count && result_row < MAX_RESULT_ROWS; row++) {
+            const char* record_ptr = data_page->records + (row * record_size);
+            bool deleted;
+            
+            deserialize_record(table->columns, table->column_count, record_ptr, result->data[result_row], &deleted);
+            
+            if (!deleted) {
+                result_row++;
+            }
         }
+        
+        current_page_id = data_page->next_page;
+        unpin_page(page);
     }
     
     result->row_count = result_row;
-    printf("scan_table: Found %d rows for table %s\n", result_row, table_name);
-    unpin_page(page);
+    printf("scan_table: Found %d rows across %d pages for table %s\n", result_row, page_count, table_name);
     return result->row_count;
 }
 

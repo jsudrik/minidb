@@ -98,34 +98,78 @@ int perform_redo_recovery() {
                         
                         printf("BEFORE INSERT: page %d has %d records\n", record.page_id, data_page->record_count);
                         
-                        // Clear page for recovery (avoid duplicate records)
-                        static bool page_cleared[1000] = {false};
-                        if (!page_cleared[record.page_id % 1000]) {
+                        // Clear page chain once at start of recovery
+                        static bool recovery_cleared = false;
+                        if (!recovery_cleared) {
                             data_page->record_count = 0;
                             data_page->next_page = -1;
                             data_page->deleted_count = 0;
                             memset(data_page->records, 0, sizeof(data_page->records));
-                            page_cleared[record.page_id % 1000] = true;
-                            printf("CLEARED page %d for recovery\n", record.page_id);
+                            recovery_cleared = true;
+                            printf("CLEARED page chain for recovery\n");
                         }
                         
-                        if (record.record_size <= 256 && 
-                            (data_page->record_count + 1) * record.record_size < sizeof(data_page->records)) {
-                            memcpy(data_page->records + (data_page->record_count * record.record_size),
-                                   record.after_image, record.record_size);
-                            data_page->record_count++;
+                        if (record.record_size <= 256) {
+                            // Always use the WAL record size for consistency
+                            int wal_record_size = record.record_size;
                             
-                            // Store the actual record size used during recovery
+                            // Store the WAL record size globally for scan operations
                             extern int g_recovery_record_size;
                             if (g_recovery_record_size == 0) {
-                                g_recovery_record_size = record.record_size;
+                                g_recovery_record_size = wal_record_size;
                                 printf("REDO: Setting recovery record size to %d\n", g_recovery_record_size);
                             }
                             
-                            mark_dirty(page);
-                            redo_count++;
-                            printf("REDO: Applied INSERT for TXN %u, page %d, new count=%d\n", 
-                                   record.txn_id, record.page_id, data_page->record_count);
+                            // Find page with space, starting from current page
+                            Page* target_page = page;
+                            DataPage* target_data_page = data_page;
+                            
+                            while (target_page && target_data_page) {
+                                if ((target_data_page->record_count + 1) * wal_record_size < sizeof(target_data_page->records)) {
+                                    // Found space - insert here
+                                    memcpy(target_data_page->records + (target_data_page->record_count * wal_record_size),
+                                           record.after_image, wal_record_size);
+                                    target_data_page->record_count++;
+                                    mark_dirty(target_page);
+                                    redo_count++;
+                                    printf("REDO: Applied INSERT #%d, page %d, count=%d\n", 
+                                           redo_count, (target_page == page) ? record.page_id : target_data_page->record_count, target_data_page->record_count);
+                                    break;
+                                }
+                                
+                                // Current page full, try next page
+                                if (target_data_page->next_page == -1) {
+                                    // Need new page
+                                    extern int allocate_page();
+                                    int new_page_id = allocate_page();
+                                    if (new_page_id > 0) {
+                                        target_data_page->next_page = new_page_id;
+                                        mark_dirty(target_page);
+                                        if (target_page != page) unpin_page(target_page);
+                                        
+                                        target_page = get_page(new_page_id, 1);
+                                        if (target_page) {
+                                            target_data_page = (DataPage*)target_page->data;
+                                            target_data_page->record_count = 0;
+                                            target_data_page->next_page = -1;
+                                            target_data_page->deleted_count = 0;
+                                            memset(target_data_page->records, 0, sizeof(target_data_page->records));
+                                            printf("REDO: Allocated new page %d\n", new_page_id);
+                                        }
+                                    } else {
+                                        break;
+                                    }
+                                } else {
+                                    // Move to existing next page
+                                    if (target_page != page) unpin_page(target_page);
+                                    target_page = get_page(target_data_page->next_page, 1);
+                                    if (target_page) {
+                                        target_data_page = (DataPage*)target_page->data;
+                                    }
+                                }
+                            }
+                            
+                            if (target_page != page && target_page) unpin_page(target_page);
                         }
                         unpin_page(page);
                     }

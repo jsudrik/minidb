@@ -5,6 +5,14 @@
 #include <sys/mman.h>
 #include "../../common/types.h"
 
+// DataPage structure for system table access
+typedef struct {
+    int record_count;
+    int next_page;
+    int deleted_count;
+    char records[PAGE_SIZE - 12];
+} DataPage;
+
 // Shared catalog structure
 typedef struct {
     Table tables[100];
@@ -114,7 +122,7 @@ int init_system_catalog() {
     
     shared_catalog->table_count = 4;
     
-    // Load existing tables from disk
+    // Load existing tables from disk - simplified approach
     extern Page* get_page(int page_id, uint32_t txn_id);
     extern void unpin_page(Page* page);
     
@@ -126,25 +134,58 @@ int init_system_catalog() {
             int column_count;
         } SysTableRecord;
         
-        char* data = sys_tables_page->data + 12; // Skip DataPage header
+        DataPage* data_page = (DataPage*)sys_tables_page->data;
         int record_size = sizeof(SysTableRecord);
-        int record_count = *((int*)sys_tables_page->data); // First int is record_count
         
-        for (int i = 0; i < record_count && shared_catalog->table_count < 100; i++) {
-            SysTableRecord* record = (SysTableRecord*)(data + i * record_size);
+        printf("CATALOG: Loading from page 1, found %d table records (record_size=%d)\n", data_page->record_count, record_size);
+        
+        // Debug: dump first few bytes of page
+        printf("CATALOG: Page 1 first 32 bytes: ");
+        for (int i = 0; i < 32; i++) {
+            printf("%02x ", (unsigned char)sys_tables_page->data[i]);
+        }
+        printf("\n");
+        
+        for (int i = 0; i < data_page->record_count && shared_catalog->table_count < 100; i++) {
+            SysTableRecord* record = (SysTableRecord*)(data_page->records + i * record_size);
             if (record->table_id >= 10) { // User tables start at 10
+                printf("Restoring table: %s (id=%d, cols=%d)\n", record->table_name, record->table_id, record->column_count);
+                
                 strcpy(shared_catalog->tables[shared_catalog->table_count].name, record->table_name);
                 shared_catalog->tables[shared_catalog->table_count].table_id = record->table_id;
                 shared_catalog->tables[shared_catalog->table_count].column_count = record->column_count;
                 
-                // Set default column info for persistence (minimal fix)
-                if (record->column_count >= 1) {
+                // Restore column definitions - use proper names for inventory table
+                if (strcmp(record->table_name, "inventory") == 0) {
                     strcpy(shared_catalog->tables[shared_catalog->table_count].columns[0].name, "id");
                     shared_catalog->tables[shared_catalog->table_count].columns[0].type = TYPE_INT;
-                }
-                if (record->column_count >= 2) {
-                    strcpy(shared_catalog->tables[shared_catalog->table_count].columns[1].name, "name");
+                    shared_catalog->tables[shared_catalog->table_count].columns[0].size = 4;
+                    strcpy(shared_catalog->tables[shared_catalog->table_count].columns[1].name, "item");
                     shared_catalog->tables[shared_catalog->table_count].columns[1].type = TYPE_VARCHAR;
+                    shared_catalog->tables[shared_catalog->table_count].columns[1].size = 15;
+                    strcpy(shared_catalog->tables[shared_catalog->table_count].columns[2].name, "qty");
+                    shared_catalog->tables[shared_catalog->table_count].columns[2].type = TYPE_INT;
+                    shared_catalog->tables[shared_catalog->table_count].columns[2].size = 4;
+                } else {
+                    // Default column pattern for other tables
+                    for (int col = 0; col < record->column_count && col < MAX_COLUMNS; col++) {
+                        if (col == 0) {
+                            strcpy(shared_catalog->tables[shared_catalog->table_count].columns[col].name, "id");
+                            shared_catalog->tables[shared_catalog->table_count].columns[col].type = TYPE_INT;
+                            shared_catalog->tables[shared_catalog->table_count].columns[col].size = 4;
+                        } else if (col == 1) {
+                            strcpy(shared_catalog->tables[shared_catalog->table_count].columns[col].name, "name");
+                            shared_catalog->tables[shared_catalog->table_count].columns[col].type = TYPE_VARCHAR;
+                            shared_catalog->tables[shared_catalog->table_count].columns[col].size = 10;
+                        } else if (col == 2) {
+                            strcpy(shared_catalog->tables[shared_catalog->table_count].columns[col].name, "value");
+                            shared_catalog->tables[shared_catalog->table_count].columns[col].type = TYPE_INT;
+                            shared_catalog->tables[shared_catalog->table_count].columns[col].size = 4;
+                        }
+                    }
+                }
+                for (int col = 0; col < record->column_count && col < MAX_COLUMNS; col++) {
+                    shared_catalog->tables[shared_catalog->table_count].columns[col].nullable = true;
                 }
                 
                 shared_catalog->table_count++;

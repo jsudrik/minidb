@@ -106,7 +106,8 @@ uint64_t write_wal_record(WALRecordType type, uint32_t txn_id, int page_id,
            type == WAL_ABORT ? "ABORT" :
            type == WAL_INSERT ? "INSERT" :
            type == WAL_UPDATE ? "UPDATE" :
-           type == WAL_DELETE ? "DELETE" : "CHECKPOINT",
+           type == WAL_DELETE ? "DELETE" :
+           type == WAL_DDL ? "DDL" : "CHECKPOINT",
            (unsigned long long)lsn, txn_id);
 #else
     printf("WAL: Wrote %s record, LSN: %lu, TXN: %u\n", 
@@ -115,7 +116,8 @@ uint64_t write_wal_record(WALRecordType type, uint32_t txn_id, int page_id,
            type == WAL_ABORT ? "ABORT" :
            type == WAL_INSERT ? "INSERT" :
            type == WAL_UPDATE ? "UPDATE" :
-           type == WAL_DELETE ? "DELETE" : "CHECKPOINT",
+           type == WAL_DELETE ? "DELETE" :
+           type == WAL_DDL ? "DDL" : "CHECKPOINT",
            (unsigned long)lsn, txn_id);
 #endif
     
@@ -144,6 +146,17 @@ uint64_t wal_log_update(uint32_t txn_id, int page_id, const char* before, const 
 
 uint64_t wal_log_delete(uint32_t txn_id, int page_id, const char* record, int record_size) {
     return write_wal_record(WAL_DELETE, txn_id, page_id, record, NULL, record_size);
+}
+
+uint64_t wal_log_ddl(uint32_t txn_id, const char* ddl_type, const char* object_name) {
+    // Store DDL info in after_image field
+    char ddl_info[256];
+    snprintf(ddl_info, sizeof(ddl_info), "%s:%s", ddl_type, object_name);
+    return write_wal_record(WAL_DDL, txn_id, -1, NULL, ddl_info, strlen(ddl_info));
+}
+
+uint64_t wal_log_commit(uint32_t txn_id) {
+    return write_wal_record(WAL_COMMIT, txn_id, -1, NULL, NULL, 0);
 }
 
 int read_wal_record(uint64_t lsn, WALRecord* record) {

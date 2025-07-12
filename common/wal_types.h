@@ -13,6 +13,7 @@ typedef enum {
     WAL_INSERT,
     WAL_UPDATE,
     WAL_DELETE,
+    WAL_DDL,
     WAL_CHECKPOINT
 } WALRecordType;
 

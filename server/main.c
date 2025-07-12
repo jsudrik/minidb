@@ -167,16 +167,38 @@ int process_query(const char* query, QueryResult* result, uint32_t txn_id) {
         
     } else if (strncmp(upper_query, "UPDATE", 6) == 0) {
         char table_name[MAX_NAME_LEN], column_name[MAX_NAME_LEN], value_str[256];
+        char where_clause[512] = "";
+        
+        // Check for WHERE clause
+        char* where_pos = strstr(query, " where ");
+        if (!where_pos) where_pos = strstr(query, " WHERE ");
+        
+        if (where_pos) {
+            strncpy(where_clause, where_pos + 7, sizeof(where_clause) - 1);
+            where_clause[sizeof(where_clause) - 1] = '\0';
+        }
+        
         if (sscanf(query, "%*s %s %*s %s = '%[^']'", table_name, column_name, value_str) == 3) {
             Value value;
             strcpy(value.string_val, value_str);
-            return execute_update(table_name, column_name, &value, "", txn_id, result);
+            return execute_update(table_name, column_name, &value, where_clause, txn_id, result);
         }
         
     } else if (strncmp(upper_query, "DELETE FROM", 11) == 0) {
         char table_name[MAX_NAME_LEN];
+        char where_clause[512] = "";
+        
+        // Check for WHERE clause
+        char* where_pos = strstr(query, " where ");
+        if (!where_pos) where_pos = strstr(query, " WHERE ");
+        
+        if (where_pos) {
+            strncpy(where_clause, where_pos + 7, sizeof(where_clause) - 1);
+            where_clause[sizeof(where_clause) - 1] = '\0';
+        }
+        
         sscanf(query, "%*s %*s %s", table_name);
-        return execute_delete(table_name, "", txn_id, result);
+        return execute_delete(table_name, where_clause, txn_id, result);
         
     } else if (strncmp(upper_query, "SELECT", 6) == 0) {
         printf("DEBUG: Processing SELECT query: %s\n", query);
@@ -348,15 +370,51 @@ int process_query(const char* query, QueryResult* result, uint32_t txn_id) {
                 printf("EXECUTOR: 📋 Executing full table scan with filter\n");
             }
             
-            printf("DEBUG: About to call execute_select_with_where\n");
-            fflush(stdout);
-            extern int execute_select_with_where(const char* table_name, const char* where_column, const char* where_value, uint32_t txn_id, QueryResult* result);
-            printf("DEBUG: Calling execute_select_with_where('%s', '%s', '%s')\n", table_names[0], where_column, where_value);
-            fflush(stdout);
-            int rows = execute_select_with_where(table_names[0], where_column, where_value, txn_id, result);
-            printf("DEBUG: execute_select_with_where returned %d\n", rows);
-            fflush(stdout);
-            return rows >= 0 ? 0 : -1;
+            // Execute WHERE clause by doing table scan first then filtering
+            printf("EXECUTOR: WHERE clause: %s = '%s'\n", where_column, where_value);
+            
+            // Get all records first
+            int scan_result = execute_select(table_names[0], true, NULL, 0, txn_id, result);
+            if (scan_result < 0) return -1;
+            
+            // Find WHERE column index
+            int col_index = -1;
+            for (int i = 0; i < result->column_count; i++) {
+                if (strcasecmp(result->columns[i].name, where_column) == 0) {
+                    col_index = i;
+                    break;
+                }
+            }
+            
+            if (col_index == -1) {
+                result->row_count = 0;
+                return 0;
+            }
+            
+            // Filter rows in-place
+            int filtered_count = 0;
+            for (int row = 0; row < result->row_count; row++) {
+                bool match = false;
+                
+                if (result->columns[col_index].type == TYPE_INT) {
+                    int where_int = atoi(where_value);
+                    match = (result->data[row][col_index].int_val == where_int);
+                } else {
+                    match = (strcmp(result->data[row][col_index].string_val, where_value) == 0);
+                }
+                
+                if (match) {
+                    if (filtered_count != row) {
+                        for (int col = 0; col < result->column_count; col++) {
+                            result->data[filtered_count][col] = result->data[row][col];
+                        }
+                    }
+                    filtered_count++;
+                }
+            }
+            
+            result->row_count = filtered_count;
+            return 0;
         } else {
             printf("OPTIMIZER: Using full table scan (no WHERE clause)\n");
             int rows = execute_select(table_names[0], select_all, columns, column_count, txn_id, result);

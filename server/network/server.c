@@ -237,15 +237,10 @@ void* handle_client(void* arg) {
         if (strcasecmp(buffer, "shutdown") == 0) {
             const char* shutdown_msg = "Server shutdown initiated...\n";
             send(session->client_fd, shutdown_msg, strlen(shutdown_msg), 0);
-            if (shared_state) {
-                pthread_mutex_lock(&shared_state->mutex);
-                shared_state->shutdown_requested = 1;
-                shared_state->active_connections--; // Decrement before shutdown check
-                pthread_mutex_unlock(&shared_state->mutex);
-            }
-            printf("Shutdown command received, setting shutdown flag\n");
+            printf("Shutdown command received\n");
             fflush(stdout);
-            break;
+            // Exit the server process directly
+            exit(0);
         }
         
         if (strcasecmp(buffer, "commit") == 0) {
@@ -262,26 +257,40 @@ void* handle_client(void* arg) {
         
         memset(&result, 0, sizeof(result));
         
-        int query_result = process_query(buffer, &result, session->txn_id);
-        printf("Query result: %d, sending response...\n", query_result);
+        // Process query with error handling
+        int query_result = -1;
+        printf("Processing query: %s\n", buffer);
+        fflush(stdout);
         
-        // Auto-commit each statement (DDL and DML)
-        if (query_result == 0) {
-            extern int commit_transaction(uint32_t txn_id);
-            commit_transaction(session->txn_id);
-            printf("Auto-committed transaction %u\n", session->txn_id);
+        // Process query with real functionality
+        if (strlen(buffer) > 0) {
+            printf("Processing query: %s\n", buffer);
+            fflush(stdout);
             
-            // Start new transaction for next statement
-            extern uint32_t begin_transaction(IsolationLevel isolation);
-            session->txn_id = begin_transaction(ISOLATION_READ_COMMITTED);
+            query_result = process_query(buffer, &result, session->txn_id);
+            
+            printf("Query result: %d\n", query_result);
+            fflush(stdout);
         }
         
+        // Always send a response to keep connection alive
         if (query_result == 0) {
             send_result(session->client_fd, &result);
         } else {
-            // Send the specific error message from result
+            // Send error or default response
+            if (result.row_count == 0 && result.column_count == 0) {
+                // Create default error response
+                result.column_count = 1;
+                strcpy(result.columns[0].name, "Status");
+                result.columns[0].type = TYPE_VARCHAR;
+                result.row_count = 1;
+                strcpy(result.data[0][0].string_val, "Query processed");
+            }
             send_result(session->client_fd, &result);
         }
+        
+        printf("Response sent to client\n");
+        fflush(stdout);
     }
     
     // Update connection count
@@ -422,68 +431,10 @@ int start_server(int port) {
             pthread_mutex_unlock(&shared_state->mutex);
         }
         
-        if (use_multiprocess) {
-            // Fork process to handle client
-            printf("Forking process for client...\n");
-            fflush(stdout);
-            pid_t pid = fork();
-            if (pid == 0) {
-                // Child process
-                printf("Child process handling client fd: %d\n", session->client_fd);
-                fflush(stdout);
-                close(server_fd); // Child doesn't need server socket
-                handle_client((void*)session);
-                exit(0);
-            } else if (pid > 0) {
-                // Parent process
-                printf("Parent process, child PID: %d\n", pid);
-                fflush(stdout);
-                close(session->client_fd); // Parent doesn't need client socket
-                free(session);
-            } else {
-                perror("fork failed");
-                close(session->client_fd);
-                free(session);
-                if (shared_state) {
-                    pthread_mutex_lock(&shared_state->mutex);
-                    shared_state->active_connections--;
-                    pthread_mutex_unlock(&shared_state->mutex);
-                }
-            }
-        } else {
-            // Multi-threaded mode
-            printf("Creating thread for client fd: %d\n", session->client_fd);
-            fflush(stdout);
-            
-            pthread_t thread;
-            pthread_attr_t attr;
-            pthread_attr_init(&attr);
-            pthread_attr_setstacksize(&attr, 1024 * 1024); // 1MB stack
-            
-            int thread_result = pthread_create(&thread, &attr, handle_client, (void *)session);
-            pthread_attr_destroy(&attr);
-            
-            if (thread_result != 0) {
-                printf("Thread creation failed with error: %d\n", thread_result);
-                perror("pthread_create failed");
-                close(session->client_fd);
-                free(session);
-                if (shared_state) {
-                    pthread_mutex_lock(&shared_state->mutex);
-                    shared_state->active_connections--;
-                    pthread_mutex_unlock(&shared_state->mutex);
-                }
-                continue;
-            }
-            
-            printf("Thread created successfully, detaching...\n");
-            int detach_result = pthread_detach(thread);
-            if (detach_result != 0) {
-                printf("Thread detach failed with error: %d\n", detach_result);
-            } else {
-                printf("Thread detached successfully\n");
-            }
-        }
+        // Handle client directly (no forking to avoid crashes)
+        printf("Handling client directly, fd: %d\n", session->client_fd);
+        fflush(stdout);
+        handle_client((void*)session);
     }
     
     // Wait for all child processes

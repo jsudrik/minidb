@@ -83,7 +83,20 @@ int execute_create_table(const char* table_name, Column* columns, int column_cou
     // Acquire write lock for DDL operation
     acquire_write_lock(txn_id, 1); // System catalog lock
     
+    // Log DDL operation to WAL
+    extern uint64_t wal_log_ddl(uint32_t txn_id, const char* ddl_type, const char* object_name);
+    wal_log_ddl(txn_id, "CREATE_TABLE", table_name);
+    
     int ret = create_table_storage(table_name, columns, column_count, txn_id);
+    
+    // Auto-commit DDL operation
+    if (ret >= 0) {
+        extern uint64_t wal_log_commit(uint32_t txn_id);
+        extern void flush_wal();
+        wal_log_commit(txn_id);
+        flush_wal(); // Ensure DDL is durable
+        printf("DDL: CREATE TABLE auto-committed and flushed\n");
+    }
     
     result->column_count = 1;
     strcpy(result->columns[0].name, "Result");
@@ -102,7 +115,20 @@ int execute_create_table(const char* table_name, Column* columns, int column_cou
 int execute_drop_table(const char* table_name, uint32_t txn_id, QueryResult* result) {
     acquire_write_lock(txn_id, 1);
     
+    // Log DDL operation to WAL
+    extern uint64_t wal_log_ddl(uint32_t txn_id, const char* ddl_type, const char* object_name);
+    wal_log_ddl(txn_id, "DROP_TABLE", table_name);
+    
     int ret = drop_table_storage(table_name, txn_id);
+    
+    // Auto-commit DDL operation
+    if (ret >= 0) {
+        extern uint64_t wal_log_commit(uint32_t txn_id);
+        extern void flush_wal();
+        wal_log_commit(txn_id);
+        flush_wal();
+        printf("DDL: DROP TABLE auto-committed and flushed\n");
+    }
     
     result->column_count = 1;
     strcpy(result->columns[0].name, "Result");
@@ -134,6 +160,15 @@ int execute_insert(const char* table_name, Value* values, int value_count, uint3
     
     int ret = insert_record(table_name, values, value_count, txn_id);
     
+    // Auto-commit INSERT operation for durability
+    if (ret == 0) {
+        extern uint64_t wal_log_commit(uint32_t txn_id);
+        extern void flush_wal();
+        wal_log_commit(txn_id);
+        flush_wal();
+        printf("DML: INSERT auto-committed and flushed\n");
+    }
+    
     result->column_count = 1;
     strcpy(result->columns[0].name, "Result");
     result->columns[0].type = TYPE_VARCHAR;
@@ -161,7 +196,17 @@ int execute_update(const char* table_name, const char* column, Value* value, con
     
     acquire_write_lock(txn_id, table->table_id);
     
+    // Call actual update_record function
     int ret = update_record(table_name, column, value, where_clause, txn_id);
+    
+    // Auto-commit UPDATE operation for durability
+    if (ret >= 0) {
+        extern uint64_t wal_log_commit(uint32_t txn_id);
+        extern void flush_wal();
+        wal_log_commit(txn_id);
+        flush_wal();
+        printf("DML: UPDATE auto-committed and flushed\n");
+    }
     
     result->column_count = 1;
     strcpy(result->columns[0].name, "Result");
@@ -190,7 +235,17 @@ int execute_delete(const char* table_name, const char* where_clause, uint32_t tx
     
     acquire_write_lock(txn_id, table->table_id);
     
+    // Call actual delete_record function
     int ret = delete_record(table_name, where_clause, txn_id);
+    
+    // Auto-commit DELETE operation for durability
+    if (ret >= 0) {
+        extern uint64_t wal_log_commit(uint32_t txn_id);
+        extern void flush_wal();
+        wal_log_commit(txn_id);
+        flush_wal();
+        printf("DML: DELETE auto-committed and flushed\n");
+    }
     
     result->column_count = 1;
     strcpy(result->columns[0].name, "Result");
@@ -360,12 +415,25 @@ int execute_create_index(const char* index_name, const char* table_name, const c
                         int index_type, uint32_t txn_id, QueryResult* result) {
     acquire_write_lock(txn_id, 1); // System catalog lock
     
+    // Log DDL operation to WAL
+    extern uint64_t wal_log_ddl(uint32_t txn_id, const char* ddl_type, const char* object_name);
+    wal_log_ddl(txn_id, "CREATE_INDEX", index_name);
+    
     int ret = -1;
     
     if (index_type == INDEX_BTREE) {
         ret = create_btree_index(index_name, table_name, column_name, txn_id);
     } else if (index_type == INDEX_HASH) {
         ret = create_hash_index(index_name, table_name, column_name, txn_id);
+    }
+    
+    // Auto-commit DDL operation
+    if (ret >= 0) {
+        extern uint64_t wal_log_commit(uint32_t txn_id);
+        extern void flush_wal();
+        wal_log_commit(txn_id);
+        flush_wal();
+        printf("DDL: CREATE INDEX auto-committed and flushed\n");
     }
     
     result->column_count = 1;
@@ -385,7 +453,20 @@ int execute_create_index(const char* index_name, const char* table_name, const c
 int execute_drop_index(const char* index_name, uint32_t txn_id, QueryResult* result) {
     acquire_write_lock(txn_id, 1);
     
+    // Log DDL operation to WAL
+    extern uint64_t wal_log_ddl(uint32_t txn_id, const char* ddl_type, const char* object_name);
+    wal_log_ddl(txn_id, "DROP_INDEX", index_name);
+    
     int ret = drop_index_storage(index_name, txn_id);
+    
+    // Auto-commit DDL operation
+    if (ret >= 0) {
+        extern uint64_t wal_log_commit(uint32_t txn_id);
+        extern void flush_wal();
+        wal_log_commit(txn_id);
+        flush_wal();
+        printf("DDL: DROP INDEX auto-committed and flushed\n");
+    }
     
     result->column_count = 1;
     strcpy(result->columns[0].name, "Result");
