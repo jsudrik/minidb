@@ -300,7 +300,7 @@ int update_record(const char* table_name, const char* column, Value* value, cons
         return -1;
     }
     
-    // Simple update - update all records (no WHERE clause processing for simplicity)
+    // Process WHERE clause if provided
     for (int row = 0; row < data_page->record_count; row++) {
         char* record_ptr = data_page->records + (row * record_size);
         Value record_values[MAX_COLUMNS];
@@ -309,20 +309,64 @@ int update_record(const char* table_name, const char* column, Value* value, cons
         deserialize_record(table->columns, table->column_count, record_ptr, record_values, &deleted);
         
         if (!deleted) {
-            // Save before image for WAL
-            char before_image[512];
-            memcpy(before_image, record_ptr, record_size);
+            bool should_update = true;
             
-            record_values[col_idx] = *value;
-            serialize_record(table->columns, table->column_count, record_values, record_ptr);
-            
-            // Enable WAL logging for UPDATE operations
-            extern uint64_t wal_log_update(uint32_t txn_id, int page_id, const char* before, const char* after, int record_size);
-            if (record_size > 0 && record_size < 512) {
-                wal_log_update(txn_id, data_page_id, before_image, record_ptr, record_size);
+            // Apply WHERE clause filter if provided
+            if (where_clause && strlen(where_clause) > 0) {
+                should_update = false;
+                // Parse WHERE clause with operators
+                char where_col[64], where_val[256], op[3];
+                if (sscanf(where_clause, "%s >= '%[^']'", where_col, where_val) == 2) { strcpy(op, ">="); }
+                else if (sscanf(where_clause, "%s <= '%[^']'", where_col, where_val) == 2) { strcpy(op, "<="); }
+                else if (sscanf(where_clause, "%s > '%[^']'", where_col, where_val) == 2) { strcpy(op, ">"); }
+                else if (sscanf(where_clause, "%s < '%[^']'", where_col, where_val) == 2) { strcpy(op, "<"); }
+                else if (sscanf(where_clause, "%s = '%[^']'", where_col, where_val) == 2) { strcpy(op, "="); }
+                else if (sscanf(where_clause, "%s >= %s", where_col, where_val) == 2) { strcpy(op, ">="); }
+                else if (sscanf(where_clause, "%s <= %s", where_col, where_val) == 2) { strcpy(op, "<="); }
+                else if (sscanf(where_clause, "%s > %s", where_col, where_val) == 2) { strcpy(op, ">"); }
+                else if (sscanf(where_clause, "%s < %s", where_col, where_val) == 2) { strcpy(op, "<"); }
+                else if (sscanf(where_clause, "%s = %s", where_col, where_val) == 2) { strcpy(op, "="); }
+                else { op[0] = '\0'; }
+                
+                if (op[0] != '\0') {
+                    // Find WHERE column
+                    for (int i = 0; i < table->column_count; i++) {
+                        if (strcasecmp(table->columns[i].name, where_col) == 0) {
+                            if (table->columns[i].type == TYPE_INT) {
+                                int where_int = atoi(where_val);
+                                int row_val = record_values[i].int_val;
+                                if (strcmp(op, "=") == 0) should_update = (row_val == where_int);
+                                else if (strcmp(op, ">") == 0) should_update = (row_val > where_int);
+                                else if (strcmp(op, "<") == 0) should_update = (row_val < where_int);
+                                else if (strcmp(op, ">=") == 0) should_update = (row_val >= where_int);
+                                else if (strcmp(op, "<=") == 0) should_update = (row_val <= where_int);
+                            } else {
+                                if (strcmp(op, "=") == 0) {
+                                    should_update = (strcmp(record_values[i].string_val, where_val) == 0);
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
             }
             
-            updated_count++;
+            if (should_update) {
+                // Save before image for WAL
+                char before_image[512];
+                memcpy(before_image, record_ptr, record_size);
+                
+                record_values[col_idx] = *value;
+                serialize_record(table->columns, table->column_count, record_values, record_ptr);
+                
+                // Enable WAL logging for UPDATE operations
+                extern uint64_t wal_log_update(uint32_t txn_id, int page_id, const char* before, const char* after, int record_size);
+                if (record_size > 0 && record_size < 512) {
+                    wal_log_update(txn_id, data_page_id, before_image, record_ptr, record_size);
+                }
+                
+                updated_count++;
+            }
         }
     }
     
@@ -346,22 +390,71 @@ int delete_record(const char* table_name, const char* where_clause, uint32_t txn
     int record_size = calculate_record_size(table->columns, table->column_count);
     int deleted_count = 0;
     
-    // Simple delete - mark all records as deleted (no WHERE clause processing)
+    // Process WHERE clause if provided
     for (int row = 0; row < data_page->record_count; row++) {
         char* record_ptr = data_page->records + (row * record_size);
         if (record_ptr[0] == 0) { // Not already deleted
-            // Save before image for WAL
-            char before_image[512];
-            memcpy(before_image, record_ptr, record_size);
+            bool should_delete = true;
             
-            // Enable WAL logging for DELETE operations
-            extern uint64_t wal_log_delete(uint32_t txn_id, int page_id, const char* record, int record_size);
-            if (record_size > 0 && record_size < 512) {
-                wal_log_delete(txn_id, data_page_id, before_image, record_size);
+            // Apply WHERE clause filter if provided
+            if (where_clause && strlen(where_clause) > 0) {
+                should_delete = false;
+                Value record_values[MAX_COLUMNS];
+                bool deleted;
+                
+                deserialize_record(table->columns, table->column_count, record_ptr, record_values, &deleted);
+                
+                // Parse WHERE clause with operators
+                char where_col[64], where_val[256], op[3];
+                if (sscanf(where_clause, "%s >= '%[^']'", where_col, where_val) == 2) { strcpy(op, ">="); }
+                else if (sscanf(where_clause, "%s <= '%[^']'", where_col, where_val) == 2) { strcpy(op, "<="); }
+                else if (sscanf(where_clause, "%s > '%[^']'", where_col, where_val) == 2) { strcpy(op, ">"); }
+                else if (sscanf(where_clause, "%s < '%[^']'", where_col, where_val) == 2) { strcpy(op, "<"); }
+                else if (sscanf(where_clause, "%s = '%[^']'", where_col, where_val) == 2) { strcpy(op, "="); }
+                else if (sscanf(where_clause, "%s >= %s", where_col, where_val) == 2) { strcpy(op, ">="); }
+                else if (sscanf(where_clause, "%s <= %s", where_col, where_val) == 2) { strcpy(op, "<="); }
+                else if (sscanf(where_clause, "%s > %s", where_col, where_val) == 2) { strcpy(op, ">"); }
+                else if (sscanf(where_clause, "%s < %s", where_col, where_val) == 2) { strcpy(op, "<"); }
+                else if (sscanf(where_clause, "%s = %s", where_col, where_val) == 2) { strcpy(op, "="); }
+                else { op[0] = '\0'; }
+                
+                if (op[0] != '\0') {
+                    // Find WHERE column
+                    for (int i = 0; i < table->column_count; i++) {
+                        if (strcasecmp(table->columns[i].name, where_col) == 0) {
+                            if (table->columns[i].type == TYPE_INT) {
+                                int where_int = atoi(where_val);
+                                int row_val = record_values[i].int_val;
+                                if (strcmp(op, "=") == 0) should_delete = (row_val == where_int);
+                                else if (strcmp(op, ">") == 0) should_delete = (row_val > where_int);
+                                else if (strcmp(op, "<") == 0) should_delete = (row_val < where_int);
+                                else if (strcmp(op, ">=") == 0) should_delete = (row_val >= where_int);
+                                else if (strcmp(op, "<=") == 0) should_delete = (row_val <= where_int);
+                            } else {
+                                if (strcmp(op, "=") == 0) {
+                                    should_delete = (strcmp(record_values[i].string_val, where_val) == 0);
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
             }
             
-            record_ptr[0] = 1; // Mark as deleted
-            deleted_count++;
+            if (should_delete) {
+                // Save before image for WAL
+                char before_image[512];
+                memcpy(before_image, record_ptr, record_size);
+                
+                // Enable WAL logging for DELETE operations
+                extern uint64_t wal_log_delete(uint32_t txn_id, int page_id, const char* record, int record_size);
+                if (record_size > 0 && record_size < 512) {
+                    wal_log_delete(txn_id, data_page_id, before_image, record_size);
+                }
+                
+                record_ptr[0] = 1; // Mark as deleted
+                deleted_count++;
+            }
         }
     }
     

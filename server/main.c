@@ -213,6 +213,7 @@ int process_query(const char* query, QueryResult* result, uint32_t txn_id) {
         // Simple WHERE clause detection
         char where_column[MAX_NAME_LEN] = "";
         char where_value[MAX_STRING_LEN] = "";
+        char where_op[3] = "";
         bool has_where = false;
         
         // Look for WHERE pattern in original query (not upper case)
@@ -225,11 +226,24 @@ int process_query(const char* query, QueryResult* result, uint32_t txn_id) {
             strncpy(temp, where_start + 7, sizeof(temp) - 1);
             temp[sizeof(temp) - 1] = '\0';
             
-            // Find = sign
-            char* eq = strchr(temp, '=');
-            if (eq) {
-                // Extract column (before =)
-                *eq = '\0';
+            // Find operator (=, >, <, >=, <=)
+            char* op_pos = NULL;
+            
+            if ((op_pos = strstr(temp, ">="))) {
+                strcpy(where_op, ">=");
+            } else if ((op_pos = strstr(temp, "<="))) {
+                strcpy(where_op, "<=");
+            } else if ((op_pos = strchr(temp, '>'))) {
+                strcpy(where_op, ">");
+            } else if ((op_pos = strchr(temp, '<'))) {
+                strcpy(where_op, "<");
+            } else if ((op_pos = strchr(temp, '='))) {
+                strcpy(where_op, "=");
+            }
+            
+            if (op_pos) {
+                // Extract column (before operator)
+                *op_pos = '\0';
                 char* col = temp;
                 while (*col == ' ') col++; // skip spaces
                 char* col_end = col + strlen(col) - 1;
@@ -238,8 +252,8 @@ int process_query(const char* query, QueryResult* result, uint32_t txn_id) {
                 if (strlen(col) > 0 && strlen(col) < MAX_NAME_LEN) {
                     strcpy(where_column, col);
                     
-                    // Extract value (after =)
-                    char* val = eq + 1;
+                    // Extract value (after operator)
+                    char* val = op_pos + strlen(where_op);
                     while (*val == ' ') val++; // skip spaces
                     
                     // Remove quotes if present
@@ -256,7 +270,7 @@ int process_query(const char* query, QueryResult* result, uint32_t txn_id) {
                     if (strlen(val) > 0 && strlen(val) < MAX_STRING_LEN) {
                         strcpy(where_value, val);
                         has_where = true;
-                        printf("OPTIMIZER: WHERE clause detected - Column: '%s', Value: '%s'\n", where_column, where_value);
+                        printf("OPTIMIZER: WHERE clause detected - Column: '%s', Op: '%s', Value: '%s'\n", where_column, where_op, where_value);
                     }
                 }
             }
@@ -308,9 +322,12 @@ int process_query(const char* query, QueryResult* result, uint32_t txn_id) {
         }
         
         // Parse columns
+        printf("DEBUG: Checking for SELECT * in: '%s'\n", upper_query);
         if (strstr(upper_query, "SELECT *")) {
             select_all = true;
+            printf("DEBUG: Found SELECT *, setting select_all = true\n");
         } else {
+            printf("DEBUG: Not SELECT *, setting select_all = false\n");
             // Parse specific columns
             char* select_start = upper_query + 6;
             char* from_start = strstr(upper_query, " FROM");
@@ -371,7 +388,7 @@ int process_query(const char* query, QueryResult* result, uint32_t txn_id) {
             }
             
             // Execute WHERE clause by doing table scan first then filtering
-            printf("EXECUTOR: WHERE clause: %s = '%s'\n", where_column, where_value);
+            printf("EXECUTOR: WHERE clause: %s %s '%s'\n", where_column, where_op, where_value);
             
             // Get all records first
             int scan_result = execute_select(table_names[0], true, NULL, 0, txn_id, result);
@@ -398,9 +415,24 @@ int process_query(const char* query, QueryResult* result, uint32_t txn_id) {
                 
                 if (result->columns[col_index].type == TYPE_INT) {
                     int where_int = atoi(where_value);
-                    match = (result->data[row][col_index].int_val == where_int);
+                    int row_val = result->data[row][col_index].int_val;
+                    
+                    if (strcmp(where_op, "=") == 0) {
+                        match = (row_val == where_int);
+                    } else if (strcmp(where_op, ">") == 0) {
+                        match = (row_val > where_int);
+                    } else if (strcmp(where_op, "<") == 0) {
+                        match = (row_val < where_int);
+                    } else if (strcmp(where_op, ">=") == 0) {
+                        match = (row_val >= where_int);
+                    } else if (strcmp(where_op, "<=") == 0) {
+                        match = (row_val <= where_int);
+                    }
                 } else {
-                    match = (strcmp(result->data[row][col_index].string_val, where_value) == 0);
+                    // String comparison only supports equality
+                    if (strcmp(where_op, "=") == 0) {
+                        match = (strcmp(result->data[row][col_index].string_val, where_value) == 0);
+                    }
                 }
                 
                 if (match) {

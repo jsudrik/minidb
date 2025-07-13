@@ -401,12 +401,46 @@ int execute_select(const char* table_name, bool select_all, char columns[][MAX_N
     // Acquire read lock for read committed isolation
     acquire_read_lock(txn_id, table->table_id);
     
+    printf("EXECUTOR: execute_select called with select_all=%s, column_count=%d\n", 
+           select_all ? "true" : "false", column_count);
+    
     if (select_all) {
         return scan_table(table_name, result, txn_id);
     } else {
-        // For simplicity, still scan all and filter later
-        int ret = scan_table(table_name, result, txn_id);
-        // In real system would do proper column projection
+        // Column projection - validate inputs first
+        if (column_count <= 0 || column_count > MAX_COLUMNS) {
+            return scan_table(table_name, result, txn_id);
+        }
+        
+        // Get all data first
+        QueryResult* temp_result = malloc(sizeof(QueryResult));
+        if (!temp_result) return -1;
+        memset(temp_result, 0, sizeof(QueryResult));
+        int ret = scan_table(table_name, temp_result, txn_id);
+        if (ret < 0) {
+            free(temp_result);
+            return ret;
+        }
+        
+        // Project columns safely
+        result->row_count = temp_result->row_count;
+        result->column_count = 0;
+        
+        for (int i = 0; i < column_count && result->column_count < MAX_COLUMNS; i++) {
+            for (int j = 0; j < table->column_count; j++) {
+                if (strcasecmp(columns[i], table->columns[j].name) == 0) {
+                    result->columns[result->column_count] = table->columns[j];
+                    // Copy data safely
+                    for (int row = 0; row < temp_result->row_count && row < MAX_RESULT_ROWS; row++) {
+                        result->data[row][result->column_count] = temp_result->data[row][j];
+                    }
+                    result->column_count++;
+                    break;
+                }
+            }
+        }
+        
+        free(temp_result);
         return ret;
     }
 }
@@ -523,8 +557,20 @@ int execute_show_tables(uint32_t txn_id, QueryResult* result) {
     result->column_count = 1;
     strcpy(result->columns[0].name, "Tables");
     result->columns[0].type = TYPE_VARCHAR;
-    result->row_count = 1;
-    strcpy(result->data[0][0].string_val, "SHOW TABLES functionality not fully implemented");
+    
+    Table tables[10];
+    int table_count = get_all_tables(tables, 10);
+    
+    if (table_count < 0) {
+        result->row_count = 1;
+        strcpy(result->data[0][0].string_val, "Failed to retrieve tables");
+        return -1;
+    }
+    
+    result->row_count = table_count;
+    for (int i = 0; i < table_count && i < MAX_RESULT_ROWS; i++) {
+        strcpy(result->data[i][0].string_val, tables[i].name);
+    }
     
     return 0;
 }
