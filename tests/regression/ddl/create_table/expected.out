@@ -1,0 +1,40 @@
+MiniDB Client - Connecting to 127.0.0.1:7000...
+Connected successfully!
+
+Connected to MiniDB Server (Read Committed Isolation)
+Connected to MiniDB Server
+Type 'help' for commands, 'quit' to exit
+
+minidb[1]> 
+Result                
+----------------------
+Table created successfully
+
+(1 row)
+minidb[2]> 
+Result                
+----------------------
+Table created successfully
+
+(1 row)
+minidb[3]> 
+Column    Type      Size      Nullable  
+----------------------------------------
+id        INT       4         YES       
+name      VARCHAR   50        YES       
+age       INT       4         YES       
+
+(3 rows)
+minidb[4]> 
+Column    Type      Size      Nullable  
+----------------------------------------
+id        INT       4         YES       
+title     VARCHAR   100       YES       
+price     INT       4         YES       
+
+(3 rows)
+minidb[5]> 
+Server shutdown initiated...
+minidb[6]> 
+
+Connection closed. Goodbye!

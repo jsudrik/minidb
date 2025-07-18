@@ -1,0 +1,11 @@
+create table test (id int, name varchar(20), value int);
+insert into test values (1, 'Alice', 100);
+insert into test values (2, 'Bob', 200);
+insert into test values (3, 'Charlie', 300);
+insert into test values (4, 'David', 400);
+select * from test;
+delete from test where id = 2;
+select * from test;
+delete from test where value > 300;
+select * from test;
+shutdown;
