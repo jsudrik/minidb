@@ -51,6 +51,21 @@ To run a specific test:
 ./run_tests.sh queries select_where
 ```
 
+### Test Reports
+
+After running tests, a report file is generated:
+- `test_report.txt` - For full test runs
+- `module_test_report.txt` - For module-specific test runs (e.g., `dml_test_report.txt`)
+
+The report includes:
+- Pass/fail status for each test
+- Summary statistics
+- List of failed tests
+
+### Failed Tests
+
+When a test fails, a `test.dif` file is created in the test directory showing the differences between expected and actual output.
+
 ### Cleanup Options
 
 To clean up all generated files without running tests:

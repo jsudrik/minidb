@@ -49,7 +49,7 @@ cleanup_test() {
     fi
     
     # Clean up test data
-    rm -f "$db_file" "$db_file-"* "$test_dir/minidb.wal"* "$output" "$output.normalized" "$test_dir/expected.out.normalized" "$test_dir/server.log"
+    rm -f "$db_file" "$db_file-"* "$test_dir/minidb.wal"* "$output" "$output.normalized" "$test_dir/expected.out.normalized" "$test_dir/server.log" "$test_dir/test.dif"
     # Also clean up any old output.out files for backward compatibility
     rm -f "$test_dir/output.out" "$test_dir/output.out.normalized"
     return 0
@@ -73,6 +73,9 @@ cleanup_all_tests() {
     
     # Clean up any stray WAL files in the main directory
     rm -f minidb.wal*
+    
+    # Clean up report files
+    rm -f test_report.txt *_test_report.txt
     
     echo -e "${GREEN}All test files cleaned up${NC}"
 }
@@ -120,13 +123,20 @@ run_test() {
     sed -E 's/127\.0\.0\.1:[0-9]+/127.0.0.1:PORT/g' "$output" | tr -s '\n' > "${output}.normalized"
     sed -E 's/127\.0\.0\.1:[0-9]+/127.0.0.1:PORT/g' "$expected" | tr -s '\n' > "${expected}.normalized"
     
+    # Create a progress indicator
+    echo -ne "${YELLOW}[RUNNING]${NC} $module/$test_name\r"
+    
     if diff -w "${output}.normalized" "${expected}.normalized" > /dev/null; then
-        echo -e "${GREEN}✓ Test passed: $module/$test_name${NC}"
+        echo -e "${GREEN}[PASSED]${NC} $module/$test_name "
         return 0
     else
-        echo -e "${RED}✗ Test failed: $module/$test_name${NC}"
+        echo -e "${RED}[FAILED]${NC} $module/$test_name"
         echo -e "${YELLOW}Differences:${NC}"
-        diff -w "${output}.normalized" "${expected}.normalized" | head -n 10
+        # Create a .dif file with the differences
+        diff_file="$test_dir/test.dif"
+        diff -w "${output}.normalized" "${expected}.normalized" > "$diff_file"
+        # Show first few lines of differences
+        head -n 10 "$diff_file"
         return 1
     fi
 }
@@ -137,8 +147,16 @@ run_module_tests() {
     local passed=0
     local failed=0
     local total=0
+    local failed_tests=()
     
     echo -e "${YELLOW}Running all tests in module: $module${NC}"
+    
+    # Create a report file
+    local report_file="${module}_test_report.txt"
+    echo "MiniDB Regression Test Report - Module: $module" > "$report_file"
+    echo "=========================================" >> "$report_file"
+    echo "Generated: $(date)" >> "$report_file"
+    echo "" >> "$report_file"
     
     # Find all test directories in the module
     for test_dir in "$module"/*/; do
@@ -146,14 +164,33 @@ run_module_tests() {
             test_name=$(basename "$test_dir")
             if run_test "$module" "$test_name"; then
                 passed=$((passed + 1))
+                echo "✓ PASS: $test_name" >> "$report_file"
             else
                 failed=$((failed + 1))
+                failed_tests+=("$test_name")
+                echo "✗ FAIL: $test_name (see $module/$test_name/test.dif)" >> "$report_file"
             fi
             total=$((total + 1))
         fi
     done
     
+    echo "" >> "$report_file"
+    echo "Summary" >> "$report_file"
+    echo "-------" >> "$report_file"
+    echo "Total tests: $total" >> "$report_file"
+    echo "Passed: $passed" >> "$report_file"
+    echo "Failed: $failed" >> "$report_file"
+    
+    if [ $failed -gt 0 ]; then
+        echo "" >> "$report_file"
+        echo "Failed Tests:" >> "$report_file"
+        for test in "${failed_tests[@]}"; do
+            echo "- $test" >> "$report_file"
+        done
+    fi
+    
     echo -e "${YELLOW}Module $module: $passed passed, $failed failed, $total total${NC}"
+    echo -e "${YELLOW}Test report saved to: $report_file${NC}"
     
     if [ $failed -eq 0 ]; then
         return 0
@@ -167,14 +204,25 @@ run_all_tests() {
     local passed=0
     local failed=0
     local total=0
+    local failed_tests=()
     
     echo -e "${YELLOW}Running all regression tests${NC}"
+    
+    # Create a report file
+    local report_file="test_report.txt"
+    echo "MiniDB Regression Test Report" > "$report_file"
+    echo "===========================" >> "$report_file"
+    echo "Generated: $(date)" >> "$report_file"
+    echo "" >> "$report_file"
     
     for module in "${MODULES[@]}"; do
         if [ -d "$module" ]; then
             module_passed=0
             module_failed=0
             module_total=0
+            
+            echo "Module: $module" >> "$report_file"
+            echo "-------------------" >> "$report_file"
             
             # Find all test directories in the module
             for test_dir in "$module"/*/; do
@@ -183,26 +231,49 @@ run_all_tests() {
                     if run_test "$module" "$test_name"; then
                         passed=$((passed + 1))
                         module_passed=$((module_passed + 1))
+                        echo "✓ PASS: $test_name" >> "$report_file"
                     else
                         failed=$((failed + 1))
                         module_failed=$((module_failed + 1))
+                        failed_tests+=("$module/$test_name")
+                        echo "✗ FAIL: $test_name (see $module/$test_name/test.dif)" >> "$report_file"
                     fi
                     total=$((total + 1))
                     module_total=$((module_total + 1))
                 fi
             done
             
+            echo "" >> "$report_file"
+            echo "Summary: $module_passed passed, $module_failed failed, $module_total total" >> "$report_file"
+            echo "" >> "$report_file"
+            
             echo -e "${YELLOW}Module $module: $module_passed passed, $module_failed failed, $module_total total${NC}"
         fi
     done
     
+    echo "" >> "$report_file"
+    echo "Overall Summary" >> "$report_file"
+    echo "---------------" >> "$report_file"
+    echo "Total tests: $total" >> "$report_file"
+    echo "Passed: $passed" >> "$report_file"
+    echo "Failed: $failed" >> "$report_file"
+    
+    if [ $failed -gt 0 ]; then
+        echo "" >> "$report_file"
+        echo "Failed Tests:" >> "$report_file"
+        for test in "${failed_tests[@]}"; do
+            echo "- $test" >> "$report_file"
+        done
+    fi
+    
     echo -e "${YELLOW}All tests: $passed passed, $failed failed, $total total${NC}"
+    echo -e "${YELLOW}Test report saved to: $report_file${NC}"
     
     if [ $failed -eq 0 ]; then
         echo -e "${GREEN}All tests passed!${NC}"
         return 0
     else
-        echo -e "${RED}Some tests failed!${NC}"
+        echo -e "${RED}Some tests failed! See $report_file for details${NC}"
         return 1
     fi
 }
