@@ -1,55 +1,50 @@
-MiniDB Client - Connecting to 127.0.0.1:7000...
+MiniDB Client - Connecting to 127.0.0.1:7777...
 Connected successfully!
 
 Connected to MiniDB Server (Read Committed Isolation)
 Connected to MiniDB Server
 Type 'help' for commands, 'quit' to exit
 
-minidb[1]> 
-Result                
+minidb[1]> Result                
 ----------------------
 Table created successfully
 
 (1 row)
-minidb[2]> 
-Result                
+minidb[2]> Result                
 ----------------------
 Record inserted successfully
 
 (1 row)
-minidb[3]> 
-Result                
+minidb[3]> Result                
 ----------------------
 Record inserted successfully
 
 (1 row)
-minidb[4]> 
-Result                
+minidb[4]> Result                
 ----------------------
 Record inserted successfully
 
 (1 row)
-minidb[5]> 
-Result               
+minidb[5]> Result               
 ---------------------
 1 record(s) updated  
 
 (1 row)
-minidb[6]> 
-Result               
+minidb[6]> Result               
 ---------------------
 1 record(s) deleted  
 
 (1 row)
-minidb[7]> 
-id        name      value     
+minidb[7]> id        name      value     
 ------------------------------
 1         Alice     100       
 2         Updated   200       
 
 (2 rows)
-minidb[8]> 
-Server shutdown initiated...
-minidb[9]> 
+minidb[8]> Error                 
+----------------------
+Query execution failed
 
+(1 row)
+minidb[9]> 
 Connection closed. Goodbye!

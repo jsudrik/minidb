@@ -75,7 +75,7 @@ cleanup_all_tests() {
     rm -f minidb.wal*
     
     # Clean up report files
-    rm -f test_report.txt *_test_report.txt
+    rm -f test_report.txt *_test_report.txt test_progress_report.txt *_progress_report.txt
     
     echo -e "${GREEN}All test files cleaned up${NC}"
 }
@@ -118,13 +118,20 @@ run_test() {
     kill $SERVER_PID 2>/dev/null
     wait $SERVER_PID 2>/dev/null
     
-    # Compare output with expected (ignoring port numbers and whitespace)
-    # Strip port numbers and normalize whitespace
-    sed -E 's/127\.0\.0\.1:[0-9]+/127.0.0.1:PORT/g' "$output" | tr -s '\n' > "${output}.normalized"
-    sed -E 's/127\.0\.0\.1:[0-9]+/127.0.0.1:PORT/g' "$expected" | tr -s '\n' > "${expected}.normalized"
+    # Compare output with expected (ignoring port numbers, memory addresses, and whitespace)
+    # Strip port numbers, normalize whitespace, and replace memory addresses
+    sed -E 's/127\.0\.0\.1:[0-9]+/127.0.0.1:PORT/g' "$output" | \
+    sed -E 's/[0-9-]+  [a-z]/MEMORY_ADDR  X/g' | \
+    tr -s '\n' > "${output}.normalized"
     
-    # Create a progress indicator
-    echo -ne "${YELLOW}[RUNNING]${NC} $module/$test_name\r"
+    sed -E 's/127\.0\.0\.1:[0-9]+/127.0.0.1:PORT/g' "$expected" | \
+    sed -E 's/[0-9-]+  [a-z]/MEMORY_ADDR  X/g' | \
+    tr -s '\n' > "${expected}.normalized"
+    
+    # Create a progress indicator (only if not part of a larger test run)
+    if [ -z "$total_tests" ] || [ "$total_tests" -eq 0 ]; then
+        echo -ne "${YELLOW}[RUNNING]${NC} $module/$test_name\r"
+    fi
     
     if diff -w "${output}.normalized" "${expected}.normalized" > /dev/null; then
         echo -e "${GREEN}[PASSED]${NC} $module/$test_name "
@@ -148,15 +155,34 @@ run_module_tests() {
     local failed=0
     local total=0
     local failed_tests=()
+    local start_time=$(date +%s)
+    local total_tests=0
+    local completed_tests=0
     
     echo -e "${YELLOW}Running all tests in module: $module${NC}"
+    
+    # Count total tests first
+    for test_dir in "$module"/*/; do
+        if [ -d "$test_dir" ]; then
+            total_tests=$((total_tests + 1))
+        fi
+    done
     
     # Create a report file
     local report_file="${module}_test_report.txt"
     echo "MiniDB Regression Test Report - Module: $module" > "$report_file"
     echo "=========================================" >> "$report_file"
     echo "Generated: $(date)" >> "$report_file"
+    echo "Started at: $(date -r $start_time)" >> "$report_file"
     echo "" >> "$report_file"
+    
+    # Create a progress report file
+    local progress_file="${module}_progress_report.txt"
+    echo "MiniDB Test Progress Report - Module: $module" > "$progress_file"
+    echo "=========================================" >> "$progress_file"
+    echo "Started: $(date)" >> "$progress_file"
+    echo "Total tests to run: $total_tests" >> "$progress_file"
+    echo "" >> "$progress_file"
     
     # Find all test directories in the module
     for test_dir in "$module"/*/; do
@@ -171,12 +197,50 @@ run_module_tests() {
                 echo "✗ FAIL: $test_name (see $module/$test_name/test.dif)" >> "$report_file"
             fi
             total=$((total + 1))
+            
+            # Update progress report
+            completed_tests=$((completed_tests + 1))
+            current_time=$(date +%s)
+            elapsed=$((current_time - start_time))
+            minutes=$((elapsed / 60))
+            seconds=$((elapsed % 60))
+            
+            # Calculate estimated time remaining
+            if [ $completed_tests -gt 0 ]; then
+                avg_time_per_test=$(echo "scale=2; $elapsed / $completed_tests" | bc)
+                remaining_tests=$((total_tests - completed_tests))
+                est_remaining_time=$(echo "scale=0; $avg_time_per_test * $remaining_tests / 1" | bc)
+                est_minutes=$((est_remaining_time / 60))
+                est_seconds=$((est_remaining_time % 60))
+            else
+                est_minutes="?"
+                est_seconds="?"
+            fi
+            
+            # Calculate percentage
+            percentage=$(echo "scale=1; $completed_tests * 100 / $total_tests" | bc)
+            
+            # Write to progress file
+            echo -e "Progress: $completed_tests/$total_tests tests completed (${percentage}%)" > "$progress_file"
+            echo -e "Time elapsed: ${minutes}m ${seconds}s" >> "$progress_file"
+            echo -e "Estimated time remaining: ${est_minutes}m ${est_seconds}s" >> "$progress_file"
+            echo -e "Passed: $passed, Failed: $failed" >> "$progress_file"
+            
+            # Also display progress on console
+            echo -ne "\r${YELLOW}Progress: $completed_tests/$total_tests tests (${percentage}%) | Time: ${minutes}m ${seconds}s | Est. remaining: ${est_minutes}m ${est_seconds}s${NC}"
         fi
     done
+    
+    # Add execution time to report
+    current_time=$(date +%s)
+    elapsed=$((current_time - start_time))
+    minutes=$((elapsed / 60))
+    seconds=$((elapsed % 60))
     
     echo "" >> "$report_file"
     echo "Summary" >> "$report_file"
     echo "-------" >> "$report_file"
+    echo "Total execution time: ${minutes}m ${seconds}s" >> "$report_file"
     echo "Total tests: $total" >> "$report_file"
     echo "Passed: $passed" >> "$report_file"
     echo "Failed: $failed" >> "$report_file"
@@ -189,8 +253,25 @@ run_module_tests() {
         done
     fi
     
+    # Final update to progress report
+    current_time=$(date +%s)
+    elapsed=$((current_time - start_time))
+    minutes=$((elapsed / 60))
+    seconds=$((elapsed % 60))
+    
+    echo -e "\n\nTest Run Completed" >> "$progress_file"
+    echo -e "------------------" >> "$progress_file"
+    echo -e "Total time: ${minutes}m ${seconds}s" >> "$progress_file"
+    echo -e "Tests run: $total" >> "$progress_file"
+    echo -e "Passed: $passed" >> "$progress_file"
+    echo -e "Failed: $failed" >> "$progress_file"
+    
+    # Clear progress line and print final summary
+    echo -e "\r                                                                                                  "
     echo -e "${YELLOW}Module $module: $passed passed, $failed failed, $total total${NC}"
+    echo -e "${YELLOW}Total time: ${minutes}m ${seconds}s${NC}"
     echo -e "${YELLOW}Test report saved to: $report_file${NC}"
+    echo -e "${YELLOW}Progress report saved to: $progress_file${NC}"
     
     if [ $failed -eq 0 ]; then
         return 0
@@ -205,15 +286,38 @@ run_all_tests() {
     local failed=0
     local total=0
     local failed_tests=()
+    local start_time=$(date +%s)
+    local total_tests=0
+    local completed_tests=0
     
     echo -e "${YELLOW}Running all regression tests${NC}"
+    
+    # Count total tests first
+    for module in "${MODULES[@]}"; do
+        if [ -d "$module" ]; then
+            for test_dir in "$module"/*/; do
+                if [ -d "$test_dir" ]; then
+                    total_tests=$((total_tests + 1))
+                fi
+            done
+        fi
+    done
     
     # Create a report file
     local report_file="test_report.txt"
     echo "MiniDB Regression Test Report" > "$report_file"
     echo "===========================" >> "$report_file"
     echo "Generated: $(date)" >> "$report_file"
+    echo "Started at: $(date -r $start_time)" >> "$report_file"
     echo "" >> "$report_file"
+    
+    # Create a progress report file
+    local progress_file="test_progress_report.txt"
+    echo "MiniDB Test Progress Report" > "$progress_file"
+    echo "========================" >> "$progress_file"
+    echo "Started: $(date)" >> "$progress_file"
+    echo "Total tests to run: $total_tests" >> "$progress_file"
+    echo "" >> "$progress_file"
     
     for module in "${MODULES[@]}"; do
         if [ -d "$module" ]; then
@@ -240,6 +344,35 @@ run_all_tests() {
                     fi
                     total=$((total + 1))
                     module_total=$((module_total + 1))
+                    
+                    # Update progress report
+                    completed_tests=$((completed_tests + 1))
+                    current_time=$(date +%s)
+                    elapsed=$((current_time - start_time))
+                    minutes=$((elapsed / 60))
+                    seconds=$((elapsed % 60))
+                    
+                    # Calculate estimated time remaining
+                    if [ $completed_tests -gt 0 ]; then
+                        avg_time_per_test=$(echo "scale=2; $elapsed / $completed_tests" | bc)
+                        remaining_tests=$((total_tests - completed_tests))
+                        est_remaining_time=$(echo "scale=0; $avg_time_per_test * $remaining_tests / 1" | bc)
+                        est_minutes=$((est_remaining_time / 60))
+                        est_seconds=$((est_remaining_time % 60))
+                    else
+                        est_minutes="?"
+                        est_seconds="?"
+                    fi
+                    
+                    # Write to progress file
+                    percentage=$(echo "scale=1; $completed_tests * 100 / $total_tests" | bc)
+                    echo -e "Progress: $completed_tests/$total_tests tests completed (${percentage}%)" > "$progress_file"
+                    echo -e "Time elapsed: ${minutes}m ${seconds}s" >> "$progress_file"
+                    echo -e "Estimated time remaining: ${est_minutes}m ${est_seconds}s" >> "$progress_file"
+                    echo -e "Passed: $passed, Failed: $failed" >> "$progress_file"
+                    
+                    # Also display progress on console
+                    echo -ne "\r${YELLOW}Progress: $completed_tests/$total_tests tests (${percentage}%) | Time: ${minutes}m ${seconds}s | Est. remaining: ${est_minutes}m ${est_seconds}s${NC}"
                 fi
             done
             
@@ -251,9 +384,16 @@ run_all_tests() {
         fi
     done
     
+    # Add execution time to report
+    current_time=$(date +%s)
+    elapsed=$((current_time - start_time))
+    minutes=$((elapsed / 60))
+    seconds=$((elapsed % 60))
+    
     echo "" >> "$report_file"
     echo "Overall Summary" >> "$report_file"
     echo "---------------" >> "$report_file"
+    echo "Total execution time: ${minutes}m ${seconds}s" >> "$report_file"
     echo "Total tests: $total" >> "$report_file"
     echo "Passed: $passed" >> "$report_file"
     echo "Failed: $failed" >> "$report_file"
@@ -266,8 +406,25 @@ run_all_tests() {
         done
     fi
     
+    # Final update to progress report
+    current_time=$(date +%s)
+    elapsed=$((current_time - start_time))
+    minutes=$((elapsed / 60))
+    seconds=$((elapsed % 60))
+    
+    echo -e "\n\nTest Run Completed" >> "$progress_file"
+    echo -e "------------------" >> "$progress_file"
+    echo -e "Total time: ${minutes}m ${seconds}s" >> "$progress_file"
+    echo -e "Tests run: $total" >> "$progress_file"
+    echo -e "Passed: $passed" >> "$progress_file"
+    echo -e "Failed: $failed" >> "$progress_file"
+    
+    # Clear progress line and print final summary
+    echo -e "\r                                                                                                  "
     echo -e "${YELLOW}All tests: $passed passed, $failed failed, $total total${NC}"
+    echo -e "${YELLOW}Total time: ${minutes}m ${seconds}s${NC}"
     echo -e "${YELLOW}Test report saved to: $report_file${NC}"
+    echo -e "${YELLOW}Progress report saved to: $progress_file${NC}"
     
     if [ $failed -eq 0 ]; then
         echo -e "${GREEN}All tests passed!${NC}"

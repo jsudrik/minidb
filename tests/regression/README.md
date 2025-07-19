@@ -51,19 +51,30 @@ To run a specific test:
 ./run_tests.sh queries select_where
 ```
 
-### Test Reports
+### Test Progress and Reports
 
-After running tests, a report file is generated:
+#### Progress Tracking
+During test execution, a progress report is displayed showing:
+- Number of tests completed out of total
+- Percentage of tests completed
+- Time elapsed
+- Estimated time remaining
+- Current pass/fail count
+
+#### Test Reports
+After running tests, report files are generated:
 - `test_report.txt` - For full test runs
 - `module_test_report.txt` - For module-specific test runs (e.g., `dml_test_report.txt`)
+- `test_progress_report.txt` - Final progress report for full test runs
+- `module_progress_report.txt` - Final progress report for module-specific runs
 
-The report includes:
+The reports include:
 - Pass/fail status for each test
 - Summary statistics
 - List of failed tests
+- Start time and total execution time
 
-### Failed Tests
-
+#### Failed Tests
 When a test fails, a `test.dif` file is created in the test directory showing the differences between expected and actual output.
 
 ### Cleanup Options

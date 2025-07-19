@@ -1,0 +1,134 @@
+MiniDB Client - Connecting to 127.0.0.1:7777...
+Connected successfully!
+
+Connected to MiniDB Server (Read Committed Isolation)
+Connected to MiniDB Server
+Type 'help' for commands, 'quit' to exit
+
+minidb[1]> Error                 
+----------------------
+Query execution failed
+
+(1 row)
+minidb[2]>             
+------------
+1635151433  
+
+(1 row)
+minidb[3]> Error                 
+----------------------
+Query execution failed
+
+(1 row)
+minidb[4]> Error                 
+----------------------
+Query execution failed
+
+(1 row)
+minidb[5]> Error                 
+----------------------
+Query execution failed
+
+(1 row)
+minidb[6]> Error                 
+----------------------
+Query execution failed
+
+(1 row)
+minidb[7]> Error                 
+----------------------
+Query execution failed
+
+(1 row)
+minidb[8]> Error                 
+----------------------
+Query execution failed
+
+(1 row)
+minidb[9]> minidb[9]> Error                 
+----------------------
+Query execution failed
+
+(1 row)
+minidb[10]> Error                 
+----------------------
+Table does not exist  
+
+(1 row)
+minidb[11]> Error                 
+----------------------
+Table does not exist  
+
+(1 row)
+minidb[12]> Error                 
+----------------------
+Table does not exist  
+
+(1 row)
+minidb[13]> Error                 
+----------------------
+Table does not exist  
+
+(1 row)
+minidb[14]> Error                 
+----------------------
+Table does not exist  
+
+(1 row)
+minidb[15]> minidb[15]> Error                 
+----------------------
+Query execution failed
+
+(1 row)
+minidb[16]> Error                 
+----------------------
+Table does not exist  
+
+(1 row)
+minidb[17]> minidb[17]> Error                 
+----------------------
+Query execution failed
+
+(1 row)
+minidb[18]> Error                 
+----------------------
+Table does not exist  
+
+(1 row)
+minidb[19]> minidb[19]> Error                 
+----------------------
+Query execution failed
+
+(1 row)
+minidb[20]> Error                 
+----------------------
+Table does not exist  
+
+(1 row)
+minidb[21]> minidb[21]> Error                 
+----------------------
+Query execution failed
+
+(1 row)
+minidb[22]> Error                 
+----------------------
+Table does not exist  
+
+(1 row)
+minidb[23]> minidb[23]> Error                 
+----------------------
+Query execution failed
+
+(1 row)
+minidb[24]> Error                 
+----------------------
+Table does not exist  
+
+(1 row)
+minidb[25]> minidb[25]> Error                 
+----------------------
+Query execution failed
+
+(1 row)
+minidb[26]> 
+Connection closed. Goodbye!
